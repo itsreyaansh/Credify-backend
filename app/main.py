@@ -1,18 +1,50 @@
-"""Main FastAPI application entry point."""
-from fastapi import FastAPI
+"""
+Main FastAPI application entry point for Credify.
+
+This module initializes and configures the FastAPI application with:
+- Database connections (MongoDB and Redis)
+- Middleware setup (CORS, error handling, logging)
+- Route registration
+- Startup/shutdown event handlers
+
+The application follows async/await patterns for high performance.
+
+Example:
+    Run the application with:
+    >>> python -m uvicorn app.main:app --reload
+
+Environment Variables (see .env.example):
+    - ENVIRONMENT: development, staging, or production
+    - DEBUG: Enable debug mode (development only)
+    - MONGODB_URL: MongoDB connection string
+    - REDIS_URL: Redis connection string
+    - JWT_SECRET: Secret key for JWT tokens
+"""
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
-from app.core.config import get_settings
+import sys
+
+from app.core.config import get_settings, validate_production_settings
 from app.core.database import connect_db, disconnect_db
 from app.core.redis_client import connect_redis, disconnect_redis
+from app.core.exceptions import CredifyException
 from app.api.middleware import setup_middleware
 from app.api.routes import auth, certificates, verification, admin, health
 
-# Configure logging
+# ==================== LOGGING CONFIGURATION ====================
+
+# Configure logging with appropriate level based on environment
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ]
 )
+
 logger = logging.getLogger(__name__)
 
 
