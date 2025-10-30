@@ -52,44 +52,85 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Lifespan context manager for startup and shutdown events.
-    Handles connection to MongoDB and Redis.
+
+    Manages application lifecycle:
+    - Startup: Connect to MongoDB and Redis
+    - Shutdown: Clean disconnect
+
+    Args:
+        app: FastAPI application instance
+
+    Raises:
+        Exception: If critical services fail to connect
     """
-    # Startup
+    # ==================== STARTUP ====================
+
+    logger.info("=" * 60)
     logger.info("Starting Credify application...")
+    logger.info(f"Environment: {get_settings().ENVIRONMENT}")
+    logger.info(f"Debug Mode: {get_settings().DEBUG}")
+    logger.info("=" * 60)
+
+    settings = get_settings()
+
+    # Validate production settings if needed
+    if settings.ENVIRONMENT == "production":
+        try:
+            validate_production_settings()
+            logger.info("✓ Production settings validated")
+        except ValueError as e:
+            logger.error(f"✗ Production settings validation failed: {str(e)}")
+            raise
+
+    # Connect to MongoDB
     try:
         await connect_db()
-        logger.info("Connected to MongoDB")
+        logger.info("✓ Connected to MongoDB")
     except Exception as e:
-        logger.error(f"Failed to connect to MongoDB: {str(e)}")
+        logger.error(f"✗ Failed to connect to MongoDB: {str(e)}")
+        logger.error("  Make sure MongoDB is running and MONGODB_URL is correct")
         raise
 
+    # Connect to Redis
+    redis_available = False
     try:
         await connect_redis()
-        logger.info("Connected to Redis")
+        logger.info("✓ Connected to Redis")
+        redis_available = True
     except Exception as e:
-        logger.error(f"Failed to connect to Redis: {str(e)}")
-        # Don't raise - Redis is optional for some operations
-        logger.warning("Continuing without Redis")
+        logger.warning(f"⚠ Failed to connect to Redis: {str(e)}")
+        logger.warning("  Continuing without Redis (caching and rate limiting disabled)")
 
+    logger.info("-" * 60)
     logger.info("Credify application started successfully")
+    logger.info("-" * 60)
 
     yield
 
-    # Shutdown
+    # ==================== SHUTDOWN ====================
+
+    logger.info("=" * 60)
     logger.info("Shutting down Credify application...")
+    logger.info("=" * 60)
+
+    # Disconnect from MongoDB
     try:
         await disconnect_db()
-        logger.info("Disconnected from MongoDB")
+        logger.info("✓ Disconnected from MongoDB")
     except Exception as e:
-        logger.error(f"Error disconnecting MongoDB: {str(e)}")
+        logger.error(f"✗ Error disconnecting MongoDB: {str(e)}")
 
-    try:
-        await disconnect_redis()
-        logger.info("Disconnected from Redis")
-    except Exception as e:
-        logger.error(f"Error disconnecting Redis: {str(e)}")
+    # Disconnect from Redis
+    if redis_available:
+        try:
+            await disconnect_redis()
+            logger.info("✓ Disconnected from Redis")
+        except Exception as e:
+            logger.error(f"✗ Error disconnecting Redis: {str(e)}")
 
+    logger.info("-" * 60)
     logger.info("Credify application shut down successfully")
+    logger.info("=" * 60)
 
 
 # Create FastAPI app
