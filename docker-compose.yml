@@ -1,0 +1,70 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      MONGODB_URL: mongodb://root:credify@mongodb:27017
+      MONGODB_DB: credify
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-min-32-chars}
+      ENVIRONMENT: development
+      DEBUG: "false"
+    volumes:
+      - ./app:/app/app
+      - ./storage:/app/storage
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - credify-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  mongodb:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: credify
+      MONGO_INITDB_DATABASE: credify
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - credify-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - credify-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mongodb_data:
+  redis_data:
+
+networks:
+  credify-network:
+    driver: bridge
