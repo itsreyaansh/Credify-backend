@@ -261,6 +261,169 @@ CREATE INDEX idx_audit_created_at ON audit_logs(created_at);
 CREATE INDEX idx_audit_action ON audit_logs(action);
 ```
 
+### webhooks Table
+
+```sql
+CREATE TABLE webhooks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Organization
+    organization_id UUID NOT NULL REFERENCES organizations(id),
+
+    -- Webhook Configuration
+    url VARCHAR(255) NOT NULL,
+    event_type VARCHAR(100) NOT NULL, -- 'verification.completed', 'certificate.created', etc.
+    secret VARCHAR(255) NOT NULL, -- For HMAC-SHA256 signing
+
+    -- Status
+    is_active BOOLEAN DEFAULT true,
+
+    -- Settings
+    retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 5,
+    retry_delay_seconds INTEGER DEFAULT 300,
+
+    -- Metadata
+    metadata JSONB DEFAULT '{}',
+
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_triggered_at TIMESTAMP
+) WITH (FILLFACTOR=90);
+
+CREATE INDEX idx_webhook_org_id ON webhooks(organization_id);
+CREATE INDEX idx_webhook_event ON webhooks(event_type);
+CREATE INDEX idx_webhook_active ON webhooks(is_active);
+CREATE INDEX idx_webhook_created_at ON webhooks(created_at);
+```
+
+### webhook_events Table
+
+```sql
+CREATE TABLE webhook_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Webhook Reference
+    webhook_id UUID NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+
+    -- Event Details
+    event_type VARCHAR(100) NOT NULL,
+    resource_id UUID NOT NULL,
+    resource_type VARCHAR(100) NOT NULL, -- 'certificate', 'verification'
+
+    -- Payload
+    payload JSONB NOT NULL,
+
+    -- Delivery Status
+    status VARCHAR(50) DEFAULT 'pending', -- 'pending', 'sent', 'failed', 'abandoned'
+    response_status_code INTEGER,
+    response_body TEXT,
+
+    -- Retry Info
+    attempt_count INTEGER DEFAULT 0,
+    last_attempt_at TIMESTAMP,
+    next_retry_at TIMESTAMP,
+
+    -- Error Tracking
+    error_message TEXT,
+
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) WITH (FILLFACTOR=90);
+
+CREATE INDEX idx_webhook_event_webhook_id ON webhook_events(webhook_id);
+CREATE INDEX idx_webhook_event_status ON webhook_events(status);
+CREATE INDEX idx_webhook_event_created_at ON webhook_events(created_at);
+CREATE INDEX idx_webhook_event_resource ON webhook_events(resource_type, resource_id);
+```
+
+### fraud_incidents Table
+
+```sql
+CREATE TABLE fraud_incidents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Relationships
+    verification_id UUID NOT NULL REFERENCES verifications(id),
+    certificate_id UUID NOT NULL REFERENCES certificates(id),
+    organization_id UUID NOT NULL REFERENCES organizations(id),
+
+    -- Fraud Classification
+    fraud_type VARCHAR(100) NOT NULL, -- 'forged', 'template_match', 'metadata_mismatch', 'ai_detected'
+    confidence_score DECIMAL(5, 2) CHECK (confidence_score >= 0 AND confidence_score <= 100),
+    severity VARCHAR(50) DEFAULT 'medium', -- 'low', 'medium', 'high', 'critical'
+
+    -- Detection Details
+    detection_layer VARCHAR(50), -- Which fraud layer detected it
+    detection_reason TEXT,
+
+    -- Geographic & Network
+    ip_address INET,
+    geolocation JSONB, -- {country, state, city, latitude, longitude}
+    user_agent VARCHAR(255),
+
+    -- Status
+    status VARCHAR(50) DEFAULT 'open', -- 'open', 'investigating', 'confirmed', 'dismissed'
+    investigated_by UUID REFERENCES users(id),
+    investigated_at TIMESTAMP,
+    investigation_notes TEXT,
+
+    -- Action Taken
+    action_taken VARCHAR(100), -- 'none', 'certificate_revoked', 'user_suspended', 'reported'
+
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) WITH (FILLFACTOR=90);
+
+CREATE INDEX idx_fraud_verification_id ON fraud_incidents(verification_id);
+CREATE INDEX idx_fraud_cert_id ON fraud_incidents(certificate_id);
+CREATE INDEX idx_fraud_org_id ON fraud_incidents(organization_id);
+CREATE INDEX idx_fraud_created_at ON fraud_incidents(created_at);
+CREATE INDEX idx_fraud_status ON fraud_incidents(status);
+CREATE INDEX idx_fraud_severity ON fraud_incidents(severity);
+```
+
+### rate_limit_keys Table (for distributed rate limiting)
+
+```sql
+CREATE TABLE rate_limit_keys (
+    id BIGSERIAL PRIMARY KEY,
+
+    -- Key identification
+    key_hash VARCHAR(64) UNIQUE NOT NULL, -- SHA-256 hash of actual key
+    key_type VARCHAR(50) NOT NULL, -- 'ip', 'user_id', 'api_key'
+    identifier VARCHAR(255) NOT NULL,
+
+    -- Rate limit config
+    limit_per_hour INTEGER DEFAULT 100,
+    limit_per_day INTEGER DEFAULT 1000,
+
+    -- Current counts
+    count_hour INTEGER DEFAULT 0,
+    count_day INTEGER DEFAULT 0,
+
+    -- Windows
+    hour_window_start TIMESTAMP,
+    day_window_start TIMESTAMP,
+
+    -- Status
+    is_blocked BOOLEAN DEFAULT false,
+    block_reason VARCHAR(255),
+    block_until TIMESTAMP,
+
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) WITH (FILLFACTOR=90);
+
+CREATE INDEX idx_rate_limit_key_hash ON rate_limit_keys(key_hash);
+CREATE INDEX idx_rate_limit_blocked ON rate_limit_keys(is_blocked);
+CREATE INDEX idx_rate_limit_type ON rate_limit_keys(key_type);
+```
+
 ## Connection Pooling Configuration
 
 ```python
