@@ -122,10 +122,6 @@ CREATE TABLE organizations (
     -- Status
     status VARCHAR(50) DEFAULT 'active', -- 'active', 'suspended', 'inactive'
 
-    -- Metadata
-    logo_url VARCHAR(255),
-    metadata JSONB DEFAULT '{}',
-
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
