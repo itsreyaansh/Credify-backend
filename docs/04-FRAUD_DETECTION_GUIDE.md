@@ -636,40 +636,47 @@ class GeminiAnalyzer:
         else:
             return 'image/jpeg'  # Default
 
-    def _analyze_seal(self, image_base64: str) -> dict:
-        """Analyze certificate seal authenticity."""
-        prompt = """Analyze this certificate image and provide:
+    def _analyze_seal(self, image_base64: str, image_type: str) -> dict:
+        """Analyze certificate seal authenticity using Claude Vision API."""
+        prompt = """Analyze this certificate image and provide JSON response:
+{
+  "is_seal_authentic": boolean,
+  "seal_authenticity_rating": 0-100 (number),
+  "concerns": [list of concerns or empty]
+}
+
 1. Is there a visible seal, logo, or stamp?
 2. Does it appear authentic and professional?
 3. Is it clearly visible and not damaged?
 4. Rate seal authenticity from 0-100
 5. List any concerns about the seal
 
-Respond in JSON format."""
+Respond ONLY with JSON."""
 
-        message = self.client.messages.create(
-            model="claude-opus-4-1-20250805",
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": image_base64,
+        try:
+            message = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1024,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": image_type,
+                                    "data": image_base64,
+                                },
                             },
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
-                    ],
-                }
-            ],
-        )
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ],
+                    }
+                ],
+            )
 
         response_text = message.content[0].text
 
