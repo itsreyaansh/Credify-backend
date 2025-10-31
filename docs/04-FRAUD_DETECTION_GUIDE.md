@@ -588,34 +588,53 @@ class GeminiAnalyzer:
     def __init__(self, image_path: str, api_key: str):
         self.image_path = image_path
         self.api_key = api_key
+        import anthropic  # Import here to handle API updates
         self.client = anthropic.Anthropic(api_key=api_key)
         self.score = 20  # Baseline
         self.flags = []
 
     def analyze(self) -> dict:
-        """Run complete AI vision analysis."""
+        """Run complete AI vision analysis using Claude Vision API."""
         try:
-            # Read and encode image
+            # Read and encode image as base64
             with open(self.image_path, 'rb') as f:
                 image_data = base64.standard_b64encode(f.read()).decode('utf-8')
 
+            # Detect image type
+            image_type = self._detect_image_type()
+
             # Analyze seal authenticity
-            seal_result = self._analyze_seal(image_data)
+            seal_result = self._analyze_seal(image_data, image_type)
 
             # Analyze text and OCR
-            text_result = self._analyze_text(image_data)
+            text_result = self._analyze_text(image_data, image_type)
 
             # Analyze layout
-            layout_result = self._analyze_layout(image_data)
+            layout_result = self._analyze_layout(image_data, image_type)
 
             # Extract details
-            details_result = self._extract_details(image_data)
+            details_result = self._extract_details(image_data, image_type)
 
             return self._generate_report(seal_result, text_result, layout_result, details_result)
 
         except Exception as e:
-            logger.error(f"Gemini analysis failed: {str(e)}")
+            logger.error(f"Vision analysis failed: {str(e)}")
             return self._error_report(str(e))
+
+    def _detect_image_type(self) -> str:
+        """Detect image type for API call."""
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(self.image_path)
+        if mime_type in ['image/jpeg', 'image/jpg']:
+            return 'image/jpeg'
+        elif mime_type == 'image/png':
+            return 'image/png'
+        elif mime_type == 'image/webp':
+            return 'image/webp'
+        elif mime_type == 'image/gif':
+            return 'image/gif'
+        else:
+            return 'image/jpeg'  # Default
 
     def _analyze_seal(self, image_base64: str) -> dict:
         """Analyze certificate seal authenticity."""
