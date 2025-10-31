@@ -678,10 +678,9 @@ Respond ONLY with JSON."""
                 ],
             )
 
-        response_text = message.content[0].text
+            response_text = message.content[0].text
 
-        # Parse response
-        try:
+            # Parse response
             import json
             seal_data = json.loads(response_text)
 
@@ -697,7 +696,11 @@ Respond ONLY with JSON."""
                 'seal_confidence': seal_data.get('seal_authenticity_rating', 0) / 100,
                 'seal_concerns': seal_data.get('concerns', [])
             }
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Seal analysis JSON parse failed: {str(e)}")
+            return {'seal_authentic': False, 'seal_confidence': 0.5}
+        except Exception as e:
+            logger.error(f"Seal analysis failed: {str(e)}")
             return {'seal_authentic': False, 'seal_confidence': 0.5}
 
     def _analyze_text(self, image_base64: str) -> dict:
