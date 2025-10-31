@@ -267,6 +267,25 @@ Authorization: Bearer {access_token}
 }
 ```
 
+#### 1.5.1 2FA Verify
+```http
+POST /auth/2fa/verify
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "totp_code": "123456"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "2FA enabled successfully"
+}
+```
+
 ---
 
 ### 2. CERTIFICATE ROUTES (`/certificates`)
