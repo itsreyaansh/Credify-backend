@@ -703,45 +703,53 @@ Respond ONLY with JSON."""
             logger.error(f"Seal analysis failed: {str(e)}")
             return {'seal_authentic': False, 'seal_confidence': 0.5}
 
-    def _analyze_text(self, image_base64: str) -> dict:
-        """Analyze certificate text and OCR."""
-        prompt = """Extract and analyze the text on this certificate:
+    def _analyze_text(self, image_base64: str, image_type: str) -> dict:
+        """Analyze certificate text and OCR using Claude Vision."""
+        prompt = """Analyze text on this certificate image. Respond with JSON:
+{
+  "main_text": "extracted text",
+  "holder_name": "name or null",
+  "issue_date": "date or null",
+  "spelling_errors": ["error1", "error2"] or [],
+  "formatting_professional": boolean,
+  "text_quality_rating": 0-100
+}
+
 1. What is the main text/degree type?
 2. What is the holder name?
 3. What is the issue date?
-4. Are there any spelling errors or typos?
+4. Are there spelling errors or typos?
 5. Is the text formatting professional?
-6. Rate text quality from 0-100
 
-Respond in JSON format."""
-
-        message = self.client.messages.create(
-            model="claude-opus-4-1-20250805",
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": image_base64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
-                    ],
-                }
-            ],
-        )
-
-        response_text = message.content[0].text
+Respond ONLY with JSON."""
 
         try:
+            message = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1024,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": image_type,
+                                    "data": image_base64,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ],
+                    }
+                ],
+            )
+
+            response_text = message.content[0].text
+
             import json
             text_data = json.loads(response_text)
 
@@ -760,7 +768,11 @@ Respond in JSON format."""
                 'spelling_errors': text_data.get('spelling_errors', []),
                 'formatting_professional': text_data.get('formatting_professional', False)
             }
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Text analysis JSON parse failed: {str(e)}")
+            return {'extracted_text': '', 'ocr_confidence': 0.5}
+        except Exception as e:
+            logger.error(f"Text analysis failed: {str(e)}")
             return {'extracted_text': '', 'ocr_confidence': 0.5}
 
     def _analyze_layout(self, image_base64: str) -> dict:
