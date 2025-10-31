@@ -775,45 +775,53 @@ Respond ONLY with JSON."""
             logger.error(f"Text analysis failed: {str(e)}")
             return {'extracted_text': '', 'ocr_confidence': 0.5}
 
-    def _analyze_layout(self, image_base64: str) -> dict:
+    def _analyze_layout(self, image_base64: str, image_type: str) -> dict:
         """Analyze certificate layout professionalism."""
-        prompt = """Analyze the overall layout of this certificate:
+        prompt = """Analyze certificate layout. Respond with JSON:
+{
+  "is_professionally_designed": boolean,
+  "margins_appropriate": boolean,
+  "alignment_proper": boolean,
+  "editing_signs": ["sign1", "sign2"] or [],
+  "appears_legitimate": boolean,
+  "professional_rating": 0-100
+}
+
 1. Is it professionally designed?
 2. Are margins and spacing appropriate?
 3. Is alignment proper?
-4. Are there any signs of poor editing or manipulation?
-5. Does it look like a legitimate official certificate?
-6. Rate professional appearance from 0-100
+4. Any signs of poor editing or manipulation?
+5. Does it look like legitimate official certificate?
 
-Respond in JSON format."""
-
-        message = self.client.messages.create(
-            model="claude-opus-4-1-20250805",
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": image_base64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
-                    ],
-                }
-            ],
-        )
-
-        response_text = message.content[0].text
+Respond ONLY with JSON."""
 
         try:
+            message = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1024,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": image_type,
+                                    "data": image_base64,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ],
+                    }
+                ],
+            )
+
+            response_text = message.content[0].text
+
             import json
             layout_data = json.loads(response_text)
 
@@ -826,52 +834,70 @@ Respond in JSON format."""
                 'professional_rating': professional_rating,
                 'editing_signs': layout_data.get('editing_signs', [])
             }
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Layout analysis JSON parse failed: {str(e)}")
+            return {'layout_professional': True, 'professional_rating': 0.7}
+        except Exception as e:
+            logger.error(f"Layout analysis failed: {str(e)}")
             return {'layout_professional': True, 'professional_rating': 0.7}
 
-    def _extract_details(self, image_base64: str) -> dict:
+    def _extract_details(self, image_base64: str, image_type: str) -> dict:
         """Extract certificate details for database matching."""
-        prompt = """Extract the following details from this certificate:
-- Degree/Certificate type (e.g., Bachelor, Master, Diploma)
+        prompt = """Extract certificate details. Respond with JSON:
+{
+  "degree_type": "Bachelor/Master/Diploma/etc or null",
+  "holder_name": "name or null",
+  "issue_date": "YYYY-MM-DD or null",
+  "institution_name": "name or null",
+  "signatures_count": 0 or number,
+  "additional_metadata": {} or null
+}
+
+Extract:
+- Degree/Certificate type
 - Holder name
-- Issue date (YYYY-MM-DD format)
+- Issue date
 - Institution name
 - Number of visible signatures
 - Any additional metadata
 
-Respond in JSON format."""
-
-        message = self.client.messages.create(
-            model="claude-opus-4-1-20250805",
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": image_base64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
-                    ],
-                }
-            ],
-        )
-
-        response_text = message.content[0].text
+Respond ONLY with JSON."""
 
         try:
+            message = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1024,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": image_type,
+                                    "data": image_base64,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ],
+                    }
+                ],
+            )
+
+            response_text = message.content[0].text
+
             import json
             details = json.loads(response_text)
             return details
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Detail extraction JSON parse failed: {str(e)}")
+            return {}
+        except Exception as e:
+            logger.error(f"Detail extraction failed: {str(e)}")
             return {}
 
     def _generate_report(self, seal_result: dict, text_result: dict, layout_result: dict, details: dict) -> dict:
