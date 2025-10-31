@@ -83,7 +83,7 @@ CREATE INDEX idx_users_created_at ON users(created_at);
 CREATE TABLE organizations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) UNIQUE NOT NULL,
-    type VARCHAR(50) NOT NULL, -- 'university', 'enterprise'
+    type VARCHAR(50) NOT NULL CHECK (type IN ('university', 'enterprise')),
 
     -- Contact
     email VARCHAR(255),
@@ -96,8 +96,13 @@ CREATE TABLE organizations (
     city VARCHAR(100),
     address TEXT,
 
+    -- Metadata
+    logo_url TEXT,
+    metadata JSONB DEFAULT '{}',
+
     -- Verification
     is_verified BOOLEAN DEFAULT false,
+    is_active BOOLEAN DEFAULT true,
     verification_status VARCHAR(50) DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
 
     -- University-specific
