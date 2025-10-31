@@ -266,6 +266,322 @@ http {
 }
 ```
 
+### Rate Limiting Configuration
+
+**Location:** `app/middleware/rate_limit.py`
+
+```python
+from redis import Redis
+from datetime import datetime, timedelta
+import hashlib
+
+class RateLimitMiddleware:
+    """Distributed rate limiting middleware using Redis."""
+
+    def __init__(self, redis_client: Redis, default_limit: int = 100):
+        self.redis = redis_client
+        self.default_limit = default_limit
+
+    async def __call__(self, scope, receive, send):
+        """Rate limit incoming requests."""
+        if scope["type"] != "http":
+            await send({"type": "http.response.start", "status": 200})
+            return
+
+        # Get client identifier
+        client_ip = self._get_client_ip(scope)
+        path = scope["path"]
+        method = scope["method"]
+
+        # Check rate limits
+        key = f"rate_limit:{client_ip}:{path}"
+        current_count = self.redis.incr(key)
+
+        if current_count == 1:
+            # First request in this window, set expiry to 1 hour
+            self.redis.expire(key, 3600)
+
+        # Get limit for this endpoint
+        limit = self._get_limit(path, method)
+
+        # Check if limit exceeded
+        if current_count > limit:
+            # Return 429 Too Many Requests
+            await send({
+                "type": "http.response.start",
+                "status": 429,
+                "headers": [[b"retry-after", b"3600"]],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b'{"error":"rate_limit_exceeded","message":"Too many requests"}',
+            })
+            return
+
+        # Add rate limit headers
+        scope["rate_limit"] = {
+            "limit": limit,
+            "remaining": limit - current_count,
+            "reset": self.redis.ttl(key)
+        }
+
+        await send(scope)
+
+    def _get_client_ip(self, scope):
+        """Extract client IP from request scope."""
+        client_host, _ = scope["client"]
+        x_forwarded_for = None
+
+        for header_name, header_value in scope.get("headers", []):
+            if header_name.lower() == b"x-forwarded-for":
+                x_forwarded_for = header_value.decode().split(",")[0].strip()
+                break
+
+        return x_forwarded_for or client_host
+
+    def _get_limit(self, path: str, method: str) -> int:
+        """Get rate limit for endpoint."""
+        limits = {
+            ("/api/v1/auth/login", "POST"): 5,  # 5 per hour
+            ("/api/v1/auth/signup", "POST"): 10,  # 10 per hour
+            ("/api/v1/verification/verify", "POST"): 10,  # 10 per hour
+            ("/api/v1/certificates/upload", "POST"): 20,  # 20 per hour
+            ("/api/v1/certificates/bulk-upload", "POST"): 5,  # 5 per hour
+            ("/health", "GET"): 1000,  # Unlimited
+        }
+
+        return limits.get((path, method), self.default_limit)
+```
+
+### WebSocket Connection Management
+
+**Location:** `app/routes/websocket.py`
+
+```python
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from typing import Set
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+class WebSocketManager:
+    """Manage WebSocket connections with reconnection support."""
+
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+        self.subscriptions: Dict[str, Set[str]] = {}  # verification_id -> set of client_ids
+
+    async def connect(self, websocket: WebSocket, client_id: str):
+        """Establish WebSocket connection."""
+        await websocket.accept()
+        self.active_connections[client_id] = websocket
+        logger.info(f"WebSocket connected: {client_id}")
+
+    def disconnect(self, client_id: str):
+        """Handle WebSocket disconnection."""
+        if client_id in self.active_connections:
+            del self.active_connections[client_id]
+        logger.info(f"WebSocket disconnected: {client_id}")
+
+    async def subscribe(self, client_id: str, verification_id: str):
+        """Subscribe client to verification updates."""
+        if verification_id not in self.subscriptions:
+            self.subscriptions[verification_id] = set()
+        self.subscriptions[verification_id].add(client_id)
+        logger.info(f"Client {client_id} subscribed to {verification_id}")
+
+    async def unsubscribe(self, client_id: str, verification_id: str):
+        """Unsubscribe client from verification updates."""
+        if verification_id in self.subscriptions:
+            self.subscriptions[verification_id].discard(client_id)
+
+    async def broadcast(self, verification_id: str, message: dict):
+        """Broadcast message to all subscribed clients."""
+        if verification_id not in self.subscriptions:
+            return
+
+        dead_connections = []
+
+        for client_id in self.subscriptions[verification_id]:
+            if client_id not in self.active_connections:
+                dead_connections.append(client_id)
+                continue
+
+            try:
+                websocket = self.active_connections[client_id]
+                await websocket.send_json(message)
+            except Exception as e:
+                logger.error(f"Error sending to {client_id}: {str(e)}")
+                dead_connections.append(client_id)
+
+        # Clean up dead connections
+        for client_id in dead_connections:
+            self.disconnect(client_id)
+            await self.unsubscribe(client_id, verification_id)
+
+    async def send_personal(self, client_id: str, message: dict):
+        """Send message to specific client."""
+        if client_id in self.active_connections:
+            try:
+                websocket = self.active_connections[client_id]
+                await websocket.send_json(message)
+            except Exception as e:
+                logger.error(f"Error sending to {client_id}: {str(e)}")
+                self.disconnect(client_id)
+
+# WebSocket Router
+ws_manager = WebSocketManager()
+
+@router.websocket("/verification/stream")
+async def verification_stream(websocket: WebSocket):
+    """WebSocket endpoint for real-time verification updates."""
+    client_id = f"client_{uuid4()}"
+
+    try:
+        await ws_manager.connect(websocket, client_id)
+
+        # Heartbeat to detect dead connections
+        import asyncio
+        async def heartbeat():
+            while client_id in ws_manager.active_connections:
+                try:
+                    await websocket.send_json({"event": "ping"})
+                    await asyncio.sleep(30)  # Every 30 seconds
+                except:
+                    break
+
+        heartbeat_task = asyncio.create_task(heartbeat())
+
+        while True:
+            # Receive subscription messages
+            data = await websocket.receive_json()
+
+            if data.get("action") == "subscribe":
+                verification_id = data.get("verification_id")
+                if verification_id:
+                    await ws_manager.subscribe(client_id, verification_id)
+
+            elif data.get("action") == "unsubscribe":
+                verification_id = data.get("verification_id")
+                if verification_id:
+                    await ws_manager.unsubscribe(client_id, verification_id)
+
+            elif data.get("action") == "ping":
+                await websocket.send_json({"event": "pong"})
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected: {client_id}")
+        ws_manager.disconnect(client_id)
+    except Exception as e:
+        logger.error(f"WebSocket error: {str(e)}")
+        ws_manager.disconnect(client_id)
+```
+
+**Client-side WebSocket Connection with Reconnection:**
+
+```javascript
+// frontend/src/services/websocket.ts
+
+export class WebSocketClient {
+  private ws: WebSocket | null = null;
+  private url: string;
+  private clientId: string;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectDelay = 3000; // 3 seconds
+  private messageHandlers: Map<string, Function> = new Map();
+  private isManualClose = false;
+
+  constructor(url: string) {
+    this.url = url;
+    this.clientId = `client_${Date.now()}_${Math.random()}`;
+  }
+
+  connect(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        this.ws = new WebSocket(this.url);
+
+        this.ws.onopen = () => {
+          console.log("WebSocket connected");
+          this.reconnectAttempts = 0;
+          resolve();
+        };
+
+        this.ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+
+          // Handle heartbeat
+          if (data.event === "ping") {
+            this.send({ event: "pong" });
+            return;
+          }
+
+          // Dispatch to handlers
+          if (data.event && this.messageHandlers.has(data.event)) {
+            const handler = this.messageHandlers.get(data.event);
+            handler?.(data);
+          }
+        };
+
+        this.ws.onerror = (error) => {
+          console.error("WebSocket error:", error);
+          reject(error);
+        };
+
+        this.ws.onclose = () => {
+          console.log("WebSocket closed");
+          if (!this.isManualClose) {
+            this.attemptReconnect();
+          }
+        };
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  private attemptReconnect() {
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.reconnectAttempts++;
+      const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+      console.log(`Attempting to reconnect in ${delay}ms...`);
+
+      setTimeout(() => {
+        this.connect().catch((error) => {
+          console.error("Reconnection failed:", error);
+        });
+      }, delay);
+    }
+  }
+
+  send(data: any): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(data));
+    }
+  }
+
+  subscribe(verificationId: string): void {
+    this.send({
+      action: "subscribe",
+      verification_id: verificationId,
+    });
+  }
+
+  on(event: string, handler: Function): void {
+    this.messageHandlers.set(event, handler);
+  }
+
+  close(): void {
+    this.isManualClose = true;
+    if (this.ws) {
+      this.ws.close();
+    }
+  }
+}
+```
+
 ### Docker Compose
 
 **Location:** `docker-compose.yml`
