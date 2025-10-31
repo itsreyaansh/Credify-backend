@@ -81,18 +81,20 @@ Admin panel             | -         | -         | -        | ✓ (Admin only)
 
 ## Implementation Example
 
-### Login Endpoint
+### Login Endpoint (CORRECTED)
 
 ```python
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from datetime import datetime
 from app.schemas.user import LoginRequest, TokenResponse
 from app.core.security import verify_password, create_tokens
 from app.models.user import User
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, status_code=200)
 async def login(
     request: LoginRequest,
     db: AsyncSession = Depends(get_db)
